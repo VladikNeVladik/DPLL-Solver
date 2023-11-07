@@ -179,19 +179,48 @@ void trial_pop_to_last_decision(TRIAL* trial, literal_t* literal)
 // DPLL algorithm //
 //================//
 
-literal_t dpll_select_literal(const FORMULA* formula, const TRIAL* trial)
+//
+// Unit propagation
+//
+bool dpll_apply_unit_propagate(TRIAL* trial, const FORMULA* formula)
 {
-    // ToDo
+    if (
+    /*  Search for unit clause:
+        \exists clause c;
+        \exists literal_t l;
+            c \in formula || clause_is_unit(c, l, trial)*/
+    )
+    {
+        trial_assert_literal(trial, l);
+        return true;
+    }
+
+    return false;
+}
+
+void dpll_exhaustive_unit_propagate(TRIAL* trial, const FORMULA* formula)
+{
+    bool ret;
+    do
+    {
+        ret = dpll_apply_unit_propagate(trial, formula);
+    }
+    while (trial_is_unsat(trial, formula) || ret == false);
 }
 
 //
 // Branching scheme
 //
 
-void dpll_apply_decide(const FORMULA* formula, TRIAL* trial)
+literal_t dpll_select_literal(const TRIAL* trial, const FORMULA* formula)
+{
+    // ToDo
+}
+
+void dpll_apply_decide(TRIAL* trial, const FORMULA* formula)
 {
     literal_t branching_literal =
-        dpll_select_literal(formula, trial);
+        dpll_select_literal(trial, formula);
 
     trial_assert_literal(trial, literal | LITERAL_DECISION_BIT);
 }
@@ -227,6 +256,9 @@ sat_t dpll_solve(const FORMULA* formula)
 
     while (sat_flag == UNDEF)
     {
+        // Optimize the search by unit propagation:
+        dpll_exhaustive_unit_propagate(&trial, formula);
+
         if (trial_is_unsat(&trial, formula))
         {
             if (trial_cur_level(&trial) == 0U)
