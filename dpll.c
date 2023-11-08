@@ -86,13 +86,36 @@ void variables_remove_literal(VARIABLES* vars, literal_t lit)
     vars->slots[slot] &= ~SUBSLOT_CONTRARY_BIT(subslot);
 }
 
+//=======================//
+// Clause data structure //
+//=======================//
+
+// Parametrize stack with literal type:
+#define _DATA_T_         literal_t
+#define _DATA_STRUCTURE_ LIT_STORAGE
+#include "template_stack.h"
+#undef _DATA_T_
+#undef _DATA_STRUCTURE_
+
+typedef struct
+{
+    LIT_STORAGE literals;
+} CLAUSE;
+
 //========================//
 // Formula data structure //
 //========================//
 
+// Parametrize stack with clause data type:
+#define _DATA_T_         CLAUSE
+#define _DATA_STRUCTURE_ CLAUSE_STORAGE
+#include "template_stack.h"
+#undef _DATA_T_
+#undef _DATA_STRUCTURE_
+
 typedef struct
 {
-    // ToDo
+    CLAUSE_STORAGE clauses;
 
     // Variables used in a formula:
     VARIABLES variables;
@@ -108,13 +131,9 @@ typedef struct
 // Assertion trial data structure //
 //================================//
 
-// Parametrize stack with literal type:
-typedef literal_t data_t;
-#include "stack.h"
-
 typedef struct {
     // Asserted literals:
-    STACK literals;
+    LIT_STORAGE literals;
 
     // Current level:
     uint32_t level;
@@ -125,7 +144,7 @@ typedef struct {
 
 void trial_init(TRIAL* trial)
 {
-    stack_init(&trial->literals);
+    LIT_STORAGE_init(&trial->literals);
     trial->level = 0U;
 
     variables_init(&trial->variables);
@@ -133,7 +152,7 @@ void trial_init(TRIAL* trial)
 
 void trial_free(TRIAL* trial)
 {
-    stack_free(&trial->literals);
+    LIT_STORAGE_free(&trial->literals);
 }
 
 // Current level for a trial - number of decision literals in it.
@@ -153,7 +172,7 @@ bool trial_is_unsat(const TRIAL* trial, const FORMULA* formula)
 void trial_assert_literal(TRIAL* trial, literal_t literal)
 {
     // Put decision into the literal:
-    stack_push(&trial->literals, literal);
+    LIT_STORAGE_push(&trial->literals, literal);
 
     if (literal & LITERAL_DECISION_BIT)
     {
@@ -167,7 +186,7 @@ void trial_pop_to_last_decision(TRIAL* trial, literal_t* literal)
 {
     do
     {
-        bool ret = stack_pop(&trial->stack, literal);
+        bool ret = LIT_STORAGE_pop(&trial->literals, literal);
         BUG_ON(!ret, "[trial_pop_to_last_decision] Expected at least one decision literal!")
     }
     while (!(*literal & LITERAL_DECISION_BIT));
@@ -209,6 +228,15 @@ void dpll_exhaustive_unit_propagate(TRIAL* trial, const FORMULA* formula)
 }
 
 //
+// Formula preprocessing
+//
+
+void dpll_preprocess_formula(const FORMULA* initial, FORMULA* resulting)
+{
+    // ToDo
+}
+
+//
 // Branching scheme
 //
 
@@ -245,8 +273,14 @@ void dpll_apply_backtrack(TRIAL* trial)
 //
 // General solver algorithm
 //
-sat_t dpll_solve(const FORMULA* formula)
+sat_t dpll_solve(const FORMULA* initial_formula)
 {
+    // Perform initial preprocessing for the formula:
+    // NOTE: it is required to initialize invariants
+    //       for the Two Watch Literal Scheme
+    FORMULA* formula;
+    dpll_preprocess_formula(initial_formula, formula);
+
     // Satisfiability status:
     sat_t sat_flag = UNDEF;
 
