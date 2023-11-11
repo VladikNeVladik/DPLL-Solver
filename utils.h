@@ -1,15 +1,15 @@
+// No copyright. Vladislav Aleinik, 2023
 #ifndef DPLL_UTILS_H
 #define DPLL_UTILS_H
 
 #include <stdlib.h>
 #include <stdio.h>
 
-#define MIN(a, b) ((a) < (b)? (a) : (b))
-
 //====================//
 // Input verification //
 //====================//
 
+#ifndef NDEBUG
 #define VERIFY_CONTRACT(contract, format, ...) \
     do { \
         if (!(contract)) { \
@@ -17,9 +17,14 @@
             exit(EXIT_FAILURE); \
         } \
     } while (0)
+#else
+#define VERIFY_CONTRACT(contract, format, ...) \
+    do {} while (0)
+#endif
 
 #define BUG_ON(contract, format, ...) \
     VERIFY_CONTRACT(!(contract), format, ##__VA_ARGS__)
+
 
 //================//
 // Bit operations //
@@ -36,5 +41,13 @@
 
 #define READ_BITS(reg, low, up) \
     (((reg) >> (low)) & ((1U << ((up) - (low) + 1U)) - 1U))
+
+//===============//
+// Miscellaneous //
+//===============//
+
+#define MIN(a, b) ((a) < (b)? (a) : (b))
+
+#define STR(token) #token
 
 #endif // DPLL_UTILS_H

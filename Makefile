@@ -4,11 +4,17 @@ CFLAGS = \
 	-Werror \
 	-O2
 
-dpll: dpll.c
-	gcc $< $(CFLAGS) -o $@
+HEADERS = \
+	dimacs.h \
+	formula.h \
+	utils.h \
+	template_stack.h
 
-run:
-	./dpll hanoi4.cnf
+dpll: dpll.c $(HEADERS)
+	@gcc $< $(CFLAGS) -o $@
+
+run: dpll
+	./dpll res/hanoi4.cnf
 
 clean:
-	rm dpll
+	@rm -f dpll
