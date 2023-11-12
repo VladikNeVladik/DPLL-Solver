@@ -28,17 +28,17 @@ typedef uint16_t literal_t;
 // Allow only 2^11 literals to make variable set comparison simpler:
 #define NUM_LITERALS 2048U
 
-bool LITERAL_eq(literal_t* el1, literal_t* el2)
+bool LITERAL_eq_value(const literal_t* el1, const literal_t* el2)
 {
     return LITERAL_VALUE_Get(*el1) == LITERAL_VALUE_Get(*el2);
 }
 
-bool LITERAL_eq_contrarity(literal_t* el1, literal_t* el2)
+bool LITERAL_eq_contrarity(const literal_t* el1, const literal_t* el2)
 {
     return (~LITERAL_DECISION_BIT & *el1) == (~LITERAL_DECISION_BIT & *el2);
 }
 
-bool LITERAL_lt(literal_t* el1, literal_t* el2)
+bool LITERAL_lt(const literal_t* el1, const literal_t* el2)
 {
     return LITERAL_VALUE_Get(*el1) < LITERAL_VALUE_Get(*el2);
 }
@@ -95,6 +95,32 @@ void VARIABLES_remove_literal(VARIABLES* vars, literal_t lit)
     vars->slots[slot] &= ~SUBSLOT_CONTRARY_BIT(subslot);
 }
 
+bool VARIABLES_literal_is_true(const VARIABLES* vars, literal_t lit)
+{
+    uint16_t val     = LITERAL_VALUE_Get(lit);
+    uint16_t slot    = val / NUM_SUBSLOTS;
+    uint16_t subslot = val % NUM_SUBSLOTS;
+
+    bool used = vars->slots[slot] & SUBSLOT_USED_BIT(subslot);
+    bool contrarity_lit = !!(lit & LITERAL_CONTRARY_BIT);
+    bool contrarity_var = !!(vars->slots[slot] & SUBSLOT_CONTRARY_BIT(subslot));
+
+    return used && contrarity_lit == contrarity_var;
+}
+
+bool VARIABLES_literal_is_false(const VARIABLES* vars, literal_t lit)
+{
+    uint16_t val     = LITERAL_VALUE_Get(lit);
+    uint16_t slot    = val / NUM_SUBSLOTS;
+    uint16_t subslot = val % NUM_SUBSLOTS;
+
+    bool used = vars->slots[slot] & SUBSLOT_USED_BIT(subslot);
+    bool contrarity_lit = !!(lit & LITERAL_CONTRARY_BIT);
+    bool contrarity_var = !!(vars->slots[slot] & SUBSLOT_CONTRARY_BIT(subslot));
+
+    return used && contrarity_lit != contrarity_var;
+}
+
 //=======================//
 // Clause data structure //
 //=======================//
@@ -113,7 +139,7 @@ void CLAUSE_init(CLAUSE* clause)
 {
     LIT_STORAGE_init(
         &clause->literals,
-        &LITERAL_eq,
+        &LITERAL_eq_value,
         &LITERAL_lt,
         true /*sorted*/);
 }
@@ -125,7 +151,13 @@ void CLAUSE_free(CLAUSE* clause)
 
 void CLAUSE_insert(CLAUSE* clause, literal_t element)
 {
-    LIT_STORAGE_insert_sorted(&clause->literals, element);
+    LIT_STORAGE_push(&clause->literals, element);
+}
+
+void CLAUSE_remove(CLAUSE* clause, size_t index)
+{
+    literal_t dumpster;
+    LIT_STORAGE_remove(&clause->literals, &dumpster, index);
 }
 
 size_t CLAUSE_size(const CLAUSE* clause)
@@ -133,22 +165,22 @@ size_t CLAUSE_size(const CLAUSE* clause)
     return clause->literals.size;
 }
 
-literal_t CLAUSE_get(CLAUSE* clause, size_t index)
+literal_t CLAUSE_get(const CLAUSE* clause, size_t index)
 {
     return LIT_STORAGE_get(&clause->literals, index);
 }
 
-bool CLAUSE_eq(CLAUSE* el1, CLAUSE* el2)
+bool CLAUSE_eq(const CLAUSE* el1, const CLAUSE* el2)
 {
     return el1 == el2;
 }
 
-bool CLAUSE_lt(CLAUSE* el1, CLAUSE* el2)
+bool CLAUSE_lt(const CLAUSE* el1, const CLAUSE* el2)
 {
-    return false;
+    return CLAUSE_size(el1) < CLAUSE_size(el2);
 }
 
-void CLAUSE_print(CLAUSE* clause)
+void CLAUSE_print(const CLAUSE* clause)
 {
     for (size_t lit_i = 0U; lit_i < CLAUSE_size(clause); ++lit_i)
     {
@@ -186,7 +218,7 @@ void FORMULA_init(FORMULA* formula)
     CLAUSE_STORAGE_init(&formula->clauses,
         CLAUSE_eq,
         CLAUSE_lt,
-        false /*unsorted*/);
+        true /*sorted*/);
 
     VARIABLES_init(&formula->variables);
 }
@@ -198,7 +230,7 @@ void FORMULA_free(FORMULA* formula)
 
 void FORMULA_insert(FORMULA* formula, CLAUSE clause)
 {
-    CLAUSE_STORAGE_push(&formula->clauses, clause);
+    CLAUSE_STORAGE_insert_sorted(&formula->clauses, clause);
 
     for (size_t lit_i = 0U; lit_i < CLAUSE_size(&clause); ++lit_i)
     {
@@ -208,12 +240,12 @@ void FORMULA_insert(FORMULA* formula, CLAUSE clause)
     }
 }
 
-size_t FORMULA_size(FORMULA* formula)
+size_t FORMULA_size(const FORMULA* formula)
 {
     return formula->clauses.size;
 }
 
-CLAUSE* FORMULA_get(FORMULA* formula, size_t index)
+CLAUSE* FORMULA_get(const FORMULA* formula, size_t index)
 {
     return CLAUSE_STORAGE_get_ptr(&formula->clauses, index);
 }

@@ -41,8 +41,8 @@ typedef struct
     size_t capacity;
 
     // Comparators:
-    bool (*comp_eq)(DATA_T* el1, DATA_T* el2);
-    bool (*comp_lt)(DATA_T* el1, DATA_T* el2);
+    bool (*comp_eq)(const DATA_T* el1, const DATA_T* el2);
+    bool (*comp_lt)(const DATA_T* el1, const DATA_T* el2);
 
     // Sortedness:
     bool sorted;
@@ -76,8 +76,8 @@ bool METHOD(ok)(DATA_STRUCTURE* stack)
 // Initialize stack to initial known state.
 void METHOD(init)(
     DATA_STRUCTURE* stack,
-    bool (*comp_eq)(DATA_T* el1, DATA_T* el2),
-    bool (*comp_lt)(DATA_T* el1, DATA_T* el2),
+    bool (*comp_eq)(const DATA_T* el1, const DATA_T* el2),
+    bool (*comp_lt)(const DATA_T* el1, const DATA_T* el2),
     bool sorted)
 {
     assert(stack != NULL);
@@ -171,7 +171,7 @@ void METHOD(resize)(DATA_STRUCTURE* stack, bool upscale)
 // Stack access //
 //==============//
 
-DATA_T METHOD(get)(DATA_STRUCTURE* stack, size_t index)
+DATA_T METHOD(get)(const DATA_STRUCTURE* stack, size_t index)
 {
     assert(stack != NULL);
 
@@ -189,7 +189,7 @@ DATA_T METHOD(get)(DATA_STRUCTURE* stack, size_t index)
     return stack->array[index];
 }
 
-DATA_T* METHOD(get_ptr)(DATA_STRUCTURE* stack, size_t index)
+DATA_T* METHOD(get_ptr)(const DATA_STRUCTURE* stack, size_t index)
 {
     assert(stack != NULL);
 
@@ -210,7 +210,7 @@ DATA_T* METHOD(get_ptr)(DATA_STRUCTURE* stack, size_t index)
 // Find an upper bound for an element.
 //
 // For internal use only.
-size_t METHOD(ubound_sorted)(DATA_STRUCTURE* stack, DATA_T element)
+size_t METHOD(ubound_sorted)(const DATA_STRUCTURE* stack, DATA_T element)
 {
     assert(stack != NULL);
 
@@ -241,7 +241,7 @@ size_t METHOD(ubound_sorted)(DATA_STRUCTURE* stack, DATA_T element)
 }
 
 // Search for an element:
-size_t METHOD(search_sorted)(DATA_STRUCTURE* stack, DATA_T element)
+size_t METHOD(search_sorted)(const DATA_STRUCTURE* stack, DATA_T element)
 {
     assert(stack != NULL);
 
@@ -271,7 +271,7 @@ size_t METHOD(search_sorted)(DATA_STRUCTURE* stack, DATA_T element)
     return left;
 }
 
-bool METHOD(find_sorted)(DATA_STRUCTURE* stack, DATA_T element)
+bool METHOD(find_sorted)(const DATA_STRUCTURE* stack, DATA_T element)
 {
     assert(stack != NULL);
 
@@ -302,8 +302,10 @@ void METHOD(push)(DATA_STRUCTURE* stack, DATA_T element)
         "[%s] Unable to push to an invalid stack\n",
         METHOD_STR(push));
 
-    VERIFY_CONTRACT(!stack->sorted,
-        "[%s] Unable to push to sorted array\n",
+    VERIFY_CONTRACT(
+        !stack->sorted || stack->size == 0U ||
+        !stack->comp_lt(&element, &stack->array[stack->size - 1U]),
+        "[%s] Push to a sorted array will break sortedness\n",
         METHOD_STR(push));
 
     // Resize to provide space for new element:
@@ -389,13 +391,40 @@ void METHOD(insert_sorted)(DATA_STRUCTURE* stack, DATA_T element)
 
     size_t index = METHOD(ubound_sorted)(stack, element);
 
-    // Move element one right:
+    // Move elements one to the right:
     for (size_t copy_i = stack->size; index < copy_i; copy_i--)
     {
         stack->array[copy_i] = stack->array[copy_i - 1U];
     }
 
     stack->array[index] = element;
+}
+
+void METHOD(remove)(DATA_STRUCTURE* stack, DATA_T* element, size_t index)
+{
+    assert(stack != NULL);
+    assert(element != NULL);
+
+    VERIFY_CONTRACT(
+        METHOD(ok)(stack),
+        "[%s] Unable to remove element from invalid stack\n",
+        METHOD_STR(remove));
+    VERIFY_CONTRACT(
+        index <= stack->size,
+        "[%s] Index out of bounds\n",
+        METHOD_STR(remove));
+
+    // Return element:
+    *element = stack->array[index];
+
+    // Move elements one to the left:
+    for (size_t copy_i = index + 1U; copy_i < stack->size; copy_i++)
+    {
+        stack->array[copy_i - 1U] = stack->array[copy_i];
+    }
+
+    // Decrement size:
+    METHOD(resize)(stack, RESIZE_ONEDOWN);
 }
 
 // Undefine macros to other uses of this
