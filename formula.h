@@ -25,6 +25,8 @@ typedef uint16_t literal_t;
 #define LITERAL_VALUE_Get(lit)        READ_BITS(lit,      0U, 10U)
 #define LITERAL_VALUE_Set(lit, val) MODIFY_BITS(lit, val, 0U, 10U)
 
+#define LITERAL_NULL 0U
+
 // Allow only 2^11 literals to make variable set comparison simpler:
 #define NUM_LITERALS 2048U
 
@@ -70,6 +72,32 @@ void VARIABLES_init(VARIABLES* vars)
 bool VARIABLES_equal(const VARIABLES* a, const VARIABLES* b)
 {
     return memcmp(a->slots, b->slots, NUM_SLOTS * sizeof(uint32_t)) == 0U;
+}
+
+literal_t VARIABLES_pop_asserted(VARIABLES* vars)
+{
+    for (uint16_t slot = 0U; slot < NUM_SLOTS; ++slot)
+    {
+        if (vars->slots[slot] != 0U)
+        {
+            for (unsigned subslot = 0U; subslot < NUM_SUBSLOTS; ++subslot)
+            {
+                bool used = vars->slots[slot] & SUBSLOT_USED_BIT(subslot);
+                if (used)
+                {
+                    literal_t lit = 0U;
+                    LITERAL_VALUE_Set(lit, slot * NUM_SUBSLOTS + subslot);
+
+                    vars->slots[slot] &= ~SUBSLOT_USED_BIT(subslot);
+                    vars->slots[slot] &= ~SUBSLOT_CONTRARY_BIT(subslot);
+
+                    return lit;
+                }
+            }
+        }
+    }
+
+    return LITERAL_NULL;
 }
 
 void VARIABLES_assert_literal(VARIABLES* vars, literal_t lit)
@@ -119,6 +147,16 @@ bool VARIABLES_literal_is_false(const VARIABLES* vars, literal_t lit)
     bool contrarity_var = !!(vars->slots[slot] & SUBSLOT_CONTRARY_BIT(subslot));
 
     return used && contrarity_lit != contrarity_var;
+}
+
+bool VARIABLES_literal_is_undef(const VARIABLES* vars, literal_t lit)
+{
+    uint16_t val     = LITERAL_VALUE_Get(lit);
+    uint16_t slot    = val / NUM_SUBSLOTS;
+    uint16_t subslot = val % NUM_SUBSLOTS;
+
+    bool used = vars->slots[slot] & SUBSLOT_USED_BIT(subslot);
+    return !used;
 }
 
 //=======================//
@@ -194,6 +232,43 @@ void CLAUSE_print(const CLAUSE* clause)
     }
 
     printf("\n");
+}
+
+//------------
+// DPLL logic
+//------------
+
+literal_t CLAUSE_watch1(const CLAUSE* clause)
+{
+    VERIFY_CONTRACT(
+        CLAUSE_size(clause) >= 2,
+        "[%s] Clause holds less then two literals", "CLAUSE_watch1");
+
+    return CLAUSE_get(clause, 0U);
+}
+
+literal_t CLAUSE_watch2(const CLAUSE* clause)
+{
+    VERIFY_CONTRACT(
+        CLAUSE_size(clause) >= 2,
+        "[%s] Claus holds less then two literals", "CLAUSE_watch2");
+
+    return CLAUSE_get(clause, 1U);
+}
+
+void CLAUSE_set_watch2(CLAUSE* clause, size_t index)
+{
+    LIT_STORAGE_swap(&clause->literals, 1U, index);
+}
+
+void CLAUSE_swap_watches(CLAUSE* clause)
+{
+    VERIFY_CONTRACT(
+        CLAUSE_size(clause) >= 2,
+        "[CLAUSE_watch2] Clause holds less then two literals (size=%zu)",
+        CLAUSE_size(clause));
+
+    LIT_STORAGE_swap(&clause->literals, 0U, 1U);
 }
 
 //========================//

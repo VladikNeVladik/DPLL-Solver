@@ -54,7 +54,7 @@ typedef struct
 
 // Verify stack internal structure.
 // NOTE: this function is for internal use only.
-bool METHOD(ok)(DATA_STRUCTURE* stack)
+bool METHOD(ok)(const DATA_STRUCTURE* stack)
 {
     if (stack->capacity != 0 && stack->array == NULL)
     {
@@ -291,6 +291,34 @@ bool METHOD(find_sorted)(const DATA_STRUCTURE* stack, DATA_T element)
 //==================//
 // Stack operations //
 //==================//
+
+// Swap elements of the stack:
+void METHOD(swap)(DATA_STRUCTURE* stack, size_t index1, size_t index2)
+{
+    assert(stack != NULL);
+
+    VERIFY_CONTRACT(
+        METHOD(ok)(stack),
+        "[%s] Unable to swap elements in an invalid stack\n",
+        METHOD_STR(swap));
+
+    VERIFY_CONTRACT(
+        index1 <= stack->size,
+        "[%s] Index #1 out of bounds\n",
+        METHOD_STR(swap));
+
+    VERIFY_CONTRACT(
+        index2 <= stack->size,
+        "[%s] Index #2 out of bounds\n",
+        METHOD_STR(swap));
+
+    if (index1 != index2)
+    {
+        DATA_T tmp           = stack->array[index1];
+        stack->array[index1] = stack->array[index2];
+        stack->array[index2] = tmp;
+    }
+}
 
 // Push an element on top of the stack.
 void METHOD(push)(DATA_STRUCTURE* stack, DATA_T element)

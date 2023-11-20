@@ -19,12 +19,19 @@ typedef enum
 typedef struct {
     // Asserted literals:
     LIT_STORAGE literals;
+    LIT_STORAGE assertion_queue;
 
     // Current level:
     uint32_t level;
 
     // Variables used in current trial:
     VARIABLES variables;
+
+    // Variables not used in current trial:
+    VARIABLES unselected;
+
+    // Flag used to check for unsatisfyibility:
+    bool conflict_flag;
 } TRIAL;
 
 void TRIAL_init(TRIAL* trial)
@@ -34,14 +41,25 @@ void TRIAL_init(TRIAL* trial)
         &LITERAL_eq_contrarity,
         &LITERAL_lt,
         false);
+
+    LIT_STORAGE_init(
+        &trial->assertion_queue,
+        &LITERAL_eq_contrarity,
+        &LITERAL_lt,
+        true);
+
     trial->level = 0U;
 
     VARIABLES_init(&trial->variables);
+    VARIABLES_init(&trial->unselected);
+
+    trial->conflict_flag = false;
 }
 
 void TRIAL_free(TRIAL* trial)
 {
     LIT_STORAGE_free(&trial->literals);
+    LIT_STORAGE_free(&trial->assertion_queue);
 }
 
 // Current level for a trial - number of decision literals in it.
@@ -61,14 +79,77 @@ bool TRIAL_literal_is_false(const TRIAL* trial, literal_t lit)
     return VARIABLES_literal_is_false(&trial->variables, lit);
 }
 
-// Checks whether a given assertion trial unsatisfies a formula:
-bool TRIAL_formula_is_unsat(const TRIAL* trial, const FORMULA* formula)
+bool TRIAL_literal_is_undef(const TRIAL* trial, literal_t lit)
 {
-    // ToDo
+    return VARIABLES_literal_is_undef(&trial->variables, lit);
+}
+
+void TRIAL_add_to_assertion_qeueue(TRIAL* trial, literal_t literal)
+{
+    if (!LIT_STORAGE_find_sorted(&trial->assertion_queue, literal))
+    {
+        LIT_STORAGE_insert_sorted(&trial->assertion_queue, literal);
+    }
+}
+
+// Checks whether a given assertion trial unsatisfies a formula:
+bool TRIAL_formula_is_unsat(const TRIAL* trial)
+{
+    return trial->conflict_flag;
+}
+
+void TRIAL_notify_watches(TRIAL* trial, FORMULA* formula, literal_t literal)
+{
+    for (size_t cls_i = 0U; cls_i < FORMULA_size(formula); ++cls_i)
+    {
+        CLAUSE* cls = FORMULA_get(formula, cls_i);
+
+        if (CLAUSE_watch1(cls) != literal && CLAUSE_watch2(cls) != literal)
+        {
+            continue;
+        }
+
+        if (CLAUSE_watch1(cls) == literal)
+        {
+            CLAUSE_swap_watches(cls);
+        }
+
+        if (TRIAL_literal_is_false(trial, CLAUSE_watch1(cls)))
+        {
+            // Find first non-watched unfalsified literal:
+            bool has_unfalsified = false;
+            for (size_t lit_i = 2U; lit_i < CLAUSE_size(cls); ++lit_i)
+            {
+                literal_t lit = CLAUSE_get(cls, lit_i);
+                if (TRIAL_literal_is_undef(trial, lit))
+                {
+                    has_unfalsified = true;
+                    CLAUSE_set_watch2(cls, lit_i);
+                    break;
+                }
+            }
+
+            if (has_unfalsified)
+            {
+                continue;
+            }
+
+            if (TRIAL_literal_is_false(trial, CLAUSE_watch1(cls)))
+            {
+                trial->conflict_flag = true;
+            }
+            else
+            {
+                // Add unit clause to insertion queue:
+                TRIAL_add_to_assertion_qeueue(trial, CLAUSE_watch1(cls));
+            }
+
+        }
+    }
 }
 
 // Add new literal into a trial:
-void TRIAL_assert_literal(TRIAL* trial, literal_t literal)
+void TRIAL_assert_literal(TRIAL* trial, FORMULA* formula, literal_t literal)
 {
     // Put decision into the literal:
     LIT_STORAGE_push(&trial->literals, literal);
@@ -78,7 +159,9 @@ void TRIAL_assert_literal(TRIAL* trial, literal_t literal)
         trial->level += 1U;
     }
 
-    VARIABLES_assert_literal(trial->variables, literal);
+    VARIABLES_assert_literal(&trial->variables, literal);
+
+    TRIAL_notify_watches(trial, formula, literal | LITERAL_CONTRARY_BIT);
 }
 
 void TRIAL_pop_to_last_decision(TRIAL* trial, literal_t* literal)
@@ -86,7 +169,7 @@ void TRIAL_pop_to_last_decision(TRIAL* trial, literal_t* literal)
     do
     {
         bool ret = LIT_STORAGE_pop(&trial->literals, literal);
-        BUG_ON(!ret, "[trial_pop_to_last_decision] Expected at least one decision literal!")
+        BUG_ON(!ret, "[%s] Expected at least one decision literal!", "trial_pop_to_last_decision");
     }
     while (!(*literal & LITERAL_DECISION_BIT));
 
@@ -100,30 +183,28 @@ void TRIAL_pop_to_last_decision(TRIAL* trial, literal_t* literal)
 //
 // Unit propagation
 //
-bool dpll_apply_unit_propagate(TRIAL* trial, const FORMULA* formula)
+bool dpll_apply_unit_propagate(TRIAL* trial, FORMULA* formula)
 {
-    if (
-    /*  ToDo: search for unit clause.
-        \exists clause c;
-        \exists literal_t l;
-            c \in formula || clause_is_unit(c, l, trial)*/
-    )
+    if (trial->assertion_queue.size != 0U)
     {
-        TRIAL_assert_literal(trial, l);
+        literal_t lit;
+        LIT_STORAGE_pop(&trial->assertion_queue, &lit);
+
+        TRIAL_assert_literal(trial, formula, lit);
         return true;
     }
 
     return false;
 }
 
-void dpll_exhaustive_unit_propagate(TRIAL* trial, const FORMULA* formula)
+void dpll_exhaustive_unit_propagate(TRIAL* trial, FORMULA* formula)
 {
     bool ret;
     do
     {
         ret = dpll_apply_unit_propagate(trial, formula);
     }
-    while (!TRIAL_formula_is_unsat(trial, formula) && ret != false);
+    while (!TRIAL_formula_is_unsat(trial) && ret != false);
 }
 
 //
@@ -138,7 +219,7 @@ sat_t dpll_preprocess_formula(const FORMULA* initial, FORMULA* resulting, TRIAL*
     for (size_t cls_i = 0U; cls_i < FORMULA_size(initial); cls_i++)
     {
         // Clause to be preprocessed:
-        const CLAUSE* clause = FORMULA_get_ptr(initial, cls_i);
+        const CLAUSE* clause = FORMULA_get(initial, cls_i);
 
         // Preprocessed clause to be inserted:
         CLAUSE rslt_clause;
@@ -180,7 +261,10 @@ sat_t dpll_preprocess_formula(const FORMULA* initial, FORMULA* resulting, TRIAL*
             }
 
             // Add literal to the clause:
-            CLAUSE_insert(&resulting, cur);
+            CLAUSE_insert(&rslt_clause, cur);
+
+            // Also allow it to be the decision literal in the future:
+            VARIABLES_assert_literal(&trial->unselected, cur);
         }
 
         // Handle non-inserted clause:
@@ -199,7 +283,7 @@ sat_t dpll_preprocess_formula(const FORMULA* initial, FORMULA* resulting, TRIAL*
         // Assert obvious literal:
         if (CLAUSE_size(&rslt_clause) == 1U)
         {
-            TRIAL_assert_literal(trial, last_copied);
+            TRIAL_assert_literal(trial, resulting, last_copied);
             dpll_exhaustive_unit_propagate(trial, resulting);
 
             continue;
@@ -221,23 +305,23 @@ sat_t dpll_preprocess_formula(const FORMULA* initial, FORMULA* resulting, TRIAL*
 // Branching scheme
 //
 
-literal_t dpll_select_literal(const TRIAL* trial, const FORMULA* formula)
+literal_t dpll_select_literal(TRIAL* trial, const FORMULA* formula)
 {
-    // ToDo
+    return VARIABLES_pop_asserted(&trial->unselected);
 }
 
-void dpll_apply_decide(TRIAL* trial, const FORMULA* formula)
+void dpll_apply_decide(TRIAL* trial, FORMULA* formula)
 {
     literal_t branching_literal =
         dpll_select_literal(trial, formula);
 
-    TRIAL_assert_literal(trial, literal | LITERAL_DECISION_BIT);
+    TRIAL_assert_literal(trial, formula, branching_literal | LITERAL_DECISION_BIT);
 }
 
 //
 // Backtracking scheme
 //
-void dpll_apply_backtrack(TRIAL* trial)
+void dpll_apply_backtrack(TRIAL* trial, FORMULA* formula)
 {
     // Pop everything to last decision literal:
     literal_t last_decision;
@@ -248,7 +332,7 @@ void dpll_apply_backtrack(TRIAL* trial)
     last_decision ^=  LITERAL_CONTRARY_BIT;
     last_decision &= ~LITERAL_DECISION_BIT;
 
-    TRIAL_assert_literal(trial, last_decision);
+    TRIAL_assert_literal(trial, formula, last_decision);
 }
 
 //
@@ -276,7 +360,7 @@ sat_t dpll_solve(const FORMULA* intial_formula)
         // Optimize the search by unit propagation:
         dpll_exhaustive_unit_propagate(&trial, &formula);
 
-        if (TRIAL_formula_is_unsat(&trial, &formula))
+        if (TRIAL_formula_is_unsat(&trial))
         {
             if (TRIAL_cur_level(&trial) == 0U)
             {
@@ -286,15 +370,15 @@ sat_t dpll_solve(const FORMULA* intial_formula)
             else
             {
                 // Pop substitution from the trial:
-                TRIAL_apply_backtrack(&trial);
+                dpll_apply_backtrack(&trial, &formula);
             }
         }
         else
         {
-            const VARIABLES* formula_vars = &formula->variables;
-            const VARIABLES*   trial_vars = &trial->variables;
+            const VARIABLES* formula_vars = &formula.variables;
+            const VARIABLES*   trial_vars = &trial.variables;
 
-            if (variables_equal(formula_vars, trial_vars))
+            if (VARIABLES_equal(formula_vars, trial_vars))
             {
                 // Explicitly get the valuation that satisfies the formula => SAT.
                 sat_flag = SAT;
@@ -302,7 +386,7 @@ sat_t dpll_solve(const FORMULA* intial_formula)
             else
             {
                 // Use decision to obtain substitution:
-                dpll_apply_decide(&trial);
+                dpll_apply_decide(&trial, &formula);
             }
         }
     }
