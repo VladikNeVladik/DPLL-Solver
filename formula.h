@@ -66,17 +66,20 @@ int LITERAL_value(literal_t lit)
 typedef struct {
     uint32_t       used[NUM_SLOTS];
     uint32_t contrarity[NUM_SLOTS];
+    uint32_t num_literals;
 } VARIABLES;
 
 void VARIABLES_init(VARIABLES* vars)
 {
     memset(vars->used,       0U, NUM_SLOTS * sizeof(uint32_t));
     memset(vars->contrarity, 0U, NUM_SLOTS * sizeof(uint32_t));
+
+    vars->num_literals = 0U;
 }
 
 bool VARIABLES_equal(const VARIABLES* a, const VARIABLES* b)
 {
-    return memcmp(a->used, b->used, NUM_SLOTS * sizeof(uint32_t)) == 0U;
+    return a->num_literals == b->num_literals;
 }
 
 literal_t VARIABLES_pop_asserted(VARIABLES* vars)
@@ -96,6 +99,8 @@ literal_t VARIABLES_pop_asserted(VARIABLES* vars)
                     vars->used[slot]       &= ~BIT_MASK(subslot);
                     vars->contrarity[slot] &= ~BIT_MASK(subslot);
 
+                    vars->num_literals -= 1U;
+
                     return lit;
                 }
             }
@@ -109,13 +114,23 @@ void VARIABLES_assert_literal(VARIABLES* vars, literal_t lit)
 {
     bool contrary = !!(lit & LITERAL_CONTRARY_BIT);
 
-    uint16_t val     = LITERAL_VALUE_Get(lit);
+    uint16_t val = LITERAL_VALUE_Get(lit);
+    BUG_ON(val == 0,
+        "[%s] Trying to assert literal zero!\n", "VARIABLES_assert_literal");
+
     uint16_t slot    = val / NUM_SUBSLOTS;
     uint16_t subslot = val % NUM_SUBSLOTS;
+
+    bool was_used = vars->used[slot] & BIT_MASK(subslot);
 
     // Use subslot and set contrarity:
     vars->used[slot]       |= BIT_MASK(subslot);
     vars->contrarity[slot] |= (contrary << subslot);
+
+    if (!was_used)
+    {
+        vars->num_literals += 1U;
+    }
 }
 
 void VARIABLES_remove_literal(VARIABLES* vars, literal_t lit)
@@ -126,6 +141,8 @@ void VARIABLES_remove_literal(VARIABLES* vars, literal_t lit)
 
     vars->used[slot]       &= ~BIT_MASK(subslot);
     vars->contrarity[slot] &= ~BIT_MASK(subslot);
+
+    vars->num_literals -= 1U;
 }
 
 bool VARIABLES_literal_is_true(const VARIABLES* vars, literal_t lit)
@@ -170,7 +187,7 @@ void VARIABLES_print(const VARIABLES* vars)
 {
     for (uint16_t slot = 0U; slot < NUM_SLOTS; ++slot)
     {
-        printf("%04x ", vars->used[slot]);
+        printf("%08x ", vars->used[slot]);
 
         // if (vars->used[slot] != 0U)
         // {
@@ -209,7 +226,7 @@ void CLAUSE_init(CLAUSE* clause)
 {
     LIT_STORAGE_init(
         &clause->literals,
-        &LITERAL_eq_value,
+        &LITERAL_eq_contrarity,
         &LITERAL_lt,
         false /*sorted*/);
 }
@@ -228,6 +245,11 @@ void CLAUSE_remove(CLAUSE* clause, size_t index)
 {
     literal_t dumpster;
     LIT_STORAGE_remove(&clause->literals, &dumpster, index);
+}
+
+bool CLAUSE_find(const CLAUSE* clause, literal_t lit)
+{
+    return LIT_STORAGE_find(&clause->literals, lit);
 }
 
 size_t CLAUSE_size(const CLAUSE* clause)

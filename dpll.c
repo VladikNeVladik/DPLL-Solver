@@ -12,6 +12,133 @@ typedef enum
     UNDEF = 2
 } sat_t;
 
+//==========================//
+// Watch list implemetation //
+//==========================//
+
+#define DATA_T         const CLAUSE*
+#define DATA_STRUCTURE WATCHED_STORAGE
+#include "template_stack.h"
+
+bool CLAUSE_PTR_eq(const CLAUSE** el1, const CLAUSE** el2)
+{
+    return *el1 == *el2;
+}
+
+bool CLAUSE_PTR_lt(const CLAUSE** el1, const CLAUSE** el2)
+{
+    BUG_ON(false, "[%s] Invalid operation", "CLAUSE_PTR_lt");
+}
+
+typedef struct
+{
+    WATCHED_STORAGE* clause_lists;
+    size_t num_literals;
+} WATCH_LIST;
+
+void WATCH_LIST_init(WATCH_LIST* wl, size_t num_literals)
+{
+    wl->num_literals = num_literals;
+    wl->clause_lists = calloc(2U*num_literals, sizeof(WATCHED_STORAGE));
+    for (size_t i = 0U; i < 2U*num_literals; ++i)
+    {
+        WATCHED_STORAGE_init(&wl->clause_lists[i],
+            CLAUSE_PTR_eq, CLAUSE_PTR_lt, false);
+    }
+}
+
+WATCHED_STORAGE* WATCH_LIST_get(WATCH_LIST* wl, literal_t lit)
+{
+    size_t index = LITERAL_VALUE_Get(lit) - 1U;
+
+    if (lit & LITERAL_CONTRARY_BIT)
+    {
+        index += wl->num_literals;
+    }
+
+    return &wl->clause_lists[index];
+}
+
+void WATCH_LIST_link_initial(WATCH_LIST* wl, const FORMULA* formula)
+{
+    for (size_t cls_i = 0U; cls_i < FORMULA_size(formula); ++cls_i)
+    {
+        CLAUSE* cls = FORMULA_get(formula, cls_i);
+
+        // Add both wathes to watch initial watch lists:
+        literal_t watch1 = CLAUSE_watch1(cls);
+        literal_t watch2 = CLAUSE_watch2(cls);
+
+        WATCHED_STORAGE* wl1 = WATCH_LIST_get(wl, watch1);
+        WATCHED_STORAGE* wl2 = WATCH_LIST_get(wl, watch2);
+
+        if (!WATCHED_STORAGE_find(wl1, cls))
+        {
+            WATCHED_STORAGE_push(wl1, cls);
+        }
+
+        if (!WATCHED_STORAGE_find(wl2, cls))
+        {
+            WATCHED_STORAGE_push(wl2, cls);
+        }
+    }
+}
+
+void WATCH_LIST_set(WATCH_LIST* wl, literal_t lit, WATCHED_STORAGE ws)
+{
+    size_t index = LITERAL_VALUE_Get(lit) - 1U;
+
+    if (lit & LITERAL_CONTRARY_BIT)
+    {
+        index += wl->num_literals;
+    }
+
+    WATCHED_STORAGE_free(&wl->clause_lists[index]);
+
+    wl->clause_lists[index] = ws;
+}
+
+void WATCH_LIST_free(WATCH_LIST* wl)
+{
+    for (size_t i = 0U; i < 2U*wl->num_literals; ++i)
+    {
+        WATCHED_STORAGE_free(&wl->clause_lists[i]);
+    }
+}
+
+void WATCH_LIST_print(WATCH_LIST* wl, const FORMULA* formula)
+{
+    for (size_t index = 0U; index < 2U * wl->num_literals; ++index)
+    {
+        int value = (index % wl->num_literals) + 1;
+        if (index >= wl->num_literals)
+        {
+            value *= -1;
+        }
+
+        WATCHED_STORAGE* ws = &wl->clause_lists[index];
+
+        if (ws->size == 0U)
+        {
+            continue;
+        }
+
+        printf("WL[%4d]", value);
+
+        for (size_t cls_i = 0U; cls_i < ws->size; ++cls_i)
+        {
+            // Fuck with the type system a bit more:
+            CLAUSE* cls = (CLAUSE*)(void*) WATCHED_STORAGE_get(ws, cls_i);
+
+            size_t cls_i = cls - formula->clauses.array;
+
+            printf(" %4zu", cls_i);
+        }
+
+        printf("\n");
+    }
+}
+
 //================================//
 // Assertion trial data structure //
 //================================//
@@ -32,9 +159,12 @@ typedef struct {
 
     // Flag used to check for unsatisfyibility:
     bool conflict_flag;
+
+    // Watch list:
+    WATCH_LIST wl;
 } TRIAL;
 
-void TRIAL_init(TRIAL* trial)
+void TRIAL_init(TRIAL* trial, size_t num_literals)
 {
     LIT_STORAGE_init(
         &trial->literals,
@@ -54,12 +184,15 @@ void TRIAL_init(TRIAL* trial)
     VARIABLES_init(&trial->unselected);
 
     trial->conflict_flag = false;
+
+    WATCH_LIST_init(&trial->wl, num_literals);
 }
 
 void TRIAL_free(TRIAL* trial)
 {
     LIT_STORAGE_free(&trial->literals);
     LIT_STORAGE_free(&trial->assertion_queue);
+    WATCH_LIST_free(&trial->wl);
 }
 
 void TRIAL_print(TRIAL* trial)
@@ -181,7 +314,6 @@ void dpll_print_progress(TRIAL* trial, FORMULA* formula)
 
         printf("\n"RESET);
     }
-
 }
 
 //
@@ -192,9 +324,17 @@ void dpll_notify_watches(TRIAL* trial, FORMULA* formula, literal_t literal)
 {
     // NOTE: literal is the inversion of the asserted literal
 
-    for (size_t cls_i = 0U; cls_i < FORMULA_size(formula); ++cls_i)
+    // Get current watch list to work with:
+    WATCHED_STORAGE* wl = WATCH_LIST_get(&trial->wl, literal);
+
+    // Create a new watch list:
+    WATCHED_STORAGE newWL;
+    WATCHED_STORAGE_init(&newWL, CLAUSE_PTR_eq, CLAUSE_PTR_lt, false);
+
+    for (size_t cls_i = 0U; cls_i < wl->size; ++cls_i)
     {
-        CLAUSE* cls = FORMULA_get(formula, cls_i);
+        // Fuck with the type system a bit:
+        CLAUSE* cls = (CLAUSE*)(void*) WATCHED_STORAGE_get(wl, cls_i);
 
         // Quick check whether clause contains a true literal:
         if (TRIAL_literal_is_true(trial, CLAUSE_watch1(cls)))
@@ -221,6 +361,9 @@ void dpll_notify_watches(TRIAL* trial, FORMULA* formula, literal_t literal)
         // Case of  TRUE/FALSE is a true clause => no notification
         if (TRIAL_literal_is_true(trial, CLAUSE_watch1(cls)))
         {
+            // Add clause to watch list:
+            WATCHED_STORAGE_push(&newWL, cls);
+
             continue;
         }
 
@@ -236,6 +379,10 @@ void dpll_notify_watches(TRIAL* trial, FORMULA* formula, literal_t literal)
             if (!TRIAL_literal_is_false(trial, lit))
             {
                 CLAUSE_set_watch2(cls, lit_i);
+
+                // Add clause to watch list:
+                WATCHED_STORAGE_push(&newWL, cls);
+
                 has_unfalsified = true;
                 break;
             }
@@ -257,15 +404,27 @@ void dpll_notify_watches(TRIAL* trial, FORMULA* formula, literal_t literal)
         {
             // Detect a falsified clause:
             trial->conflict_flag = true;
-            return;
+
+            // Add clause to watch list:
+            WATCHED_STORAGE_push(&newWL, cls);
         }
         else
         {
             // Add unit clause to unit-propagation queue:
             TRIAL_add_to_assertion_queue(trial, CLAUSE_watch1(cls));
+
+            // Add clause to watch list:
+            WATCHED_STORAGE_push(&newWL, cls);
         }
     }
+
+    // Update watch list:
+    WATCH_LIST_set(&trial->wl, literal, newWL);
+
+    printf(YELLOW"[WATCH %d]\n"RESET, LITERAL_value(literal));
+    WATCH_LIST_print(&trial->wl, formula);
 }
+
 void dpll_assert_literal(TRIAL* trial, FORMULA* formula, literal_t literal)
 {
     // Put decision into the literal:
@@ -330,7 +489,8 @@ sat_t dpll_preprocess_formula(const FORMULA* initial, FORMULA* resulting, TRIAL*
     for (size_t cls_i = 0U; cls_i < FORMULA_size(initial); cls_i++)
     {
         // Clause to be preprocessed:
-        const CLAUSE* clause = FORMULA_get(initial, cls_i);
+        // (Fuck the type system a bit)
+        CLAUSE* clause = FORMULA_get(initial, cls_i);
 
         // Preprocessed clause to be inserted:
         CLAUSE rslt_clause;
@@ -338,7 +498,6 @@ sat_t dpll_preprocess_formula(const FORMULA* initial, FORMULA* resulting, TRIAL*
 
         // Iterate over literals of a clause and copy them to rslt_clause:
         bool insert_clause = true;
-        literal_t last_copied = 0U;
         for (size_t lit_i = 0U; lit_i < CLAUSE_size(clause); lit_i++)
         {
             literal_t cur = CLAUSE_get(clause, lit_i);
@@ -357,10 +516,10 @@ sat_t dpll_preprocess_formula(const FORMULA* initial, FORMULA* resulting, TRIAL*
             }
 
             // Handle duplicates and tautology:
-            if (CLAUSE_size(&rslt_clause) != 0U && LITERAL_eq_value(&last_copied, &cur))
+            if (CLAUSE_find(&rslt_clause, cur))
             {
                 // Detect clause tautology:
-                if (!LITERAL_eq_contrarity(&last_copied, &cur))
+                if (CLAUSE_find(&rslt_clause, cur ^ LITERAL_CONTRARY_BIT))
                 {
                     // Remove tautological clause:
                     insert_clause = false;
@@ -394,7 +553,7 @@ sat_t dpll_preprocess_formula(const FORMULA* initial, FORMULA* resulting, TRIAL*
         // Assert obvious literal:
         if (CLAUSE_size(&rslt_clause) == 1U)
         {
-            dpll_assert_literal(trial, resulting, last_copied);
+            dpll_assert_literal(trial, resulting, CLAUSE_get(&rslt_clause, 0U));
             dpll_exhaustive_unit_propagate(trial, resulting);
 
             continue;
@@ -409,6 +568,9 @@ sat_t dpll_preprocess_formula(const FORMULA* initial, FORMULA* resulting, TRIAL*
         return SAT;
     }
 
+    // Initialize watch list:
+    WATCH_LIST_link_initial(&trial->wl, resulting);
+
     return UNDEF;
 }
 
@@ -418,6 +580,35 @@ sat_t dpll_preprocess_formula(const FORMULA* initial, FORMULA* resulting, TRIAL*
 
 literal_t dpll_select_literal(TRIAL* trial, const FORMULA* formula)
 {
+    // Iterate over the formula from least clauses to bigger:
+    // literal_t selected = LITERAL_NULL;
+    // for (size_t cls_i = 0U; cls_i < FORMULA_size(formula); ++cls_i)
+    // {
+    //     CLAUSE* cls = FORMULA_get(formula, cls_i);
+
+    //     // Check only the watches:
+    //     literal_t watch1 = CLAUSE_watch1(cls);
+    //     literal_t watch2 = CLAUSE_watch2(cls);
+
+    //     if (TRIAL_literal_is_undef(trial, watch1))
+    //     {
+    //         selected = watch1 ^ LITERAL_CONTRARY_BIT;
+    //         break;
+    //     }
+
+    //     if (TRIAL_literal_is_undef(trial, watch2))
+    //     {
+    //         selected = watch2 ^ LITERAL_CONTRARY_BIT;
+    //         break;
+    //     }
+    // }
+
+    // if (selected != LITERAL_NULL)
+    // {
+    //     VARIABLES_remove_literal(&trial->unselected, selected);
+    //     return selected;
+    // }
+
     return VARIABLES_pop_asserted(&trial->unselected);
 }
 
@@ -455,11 +646,11 @@ void dpll_apply_backtrack(TRIAL* trial, FORMULA* formula)
 //
 // General solver algorithm
 //
-sat_t dpll_solve(const FORMULA* intial_formula)
+sat_t dpll_solve(const FORMULA* initial_formula)
 {
     // Assertion trial:
     TRIAL trial;
-    TRIAL_init(&trial);
+    TRIAL_init(&trial, initial_formula->variables.num_literals);
 
     // Satisfiability status:
     sat_t sat_flag = UNDEF;
@@ -469,7 +660,7 @@ sat_t dpll_solve(const FORMULA* intial_formula)
     //       for the Two Watch Literal Scheme
     FORMULA formula;
 
-    sat_flag = dpll_preprocess_formula(intial_formula, &formula, &trial);
+    sat_flag = dpll_preprocess_formula(initial_formula, &formula, &trial);
 
     printf(YELLOW"[PREPROCESS] "RESET);
     dpll_print_progress(&trial, &formula);
@@ -504,9 +695,6 @@ sat_t dpll_solve(const FORMULA* intial_formula)
             const VARIABLES* formula_vars = &formula.variables;
             const VARIABLES*   trial_vars = &trial.variables;
 
-            VARIABLES_print(formula_vars);
-            VARIABLES_print(trial_vars);
-
             if (VARIABLES_equal(formula_vars, trial_vars))
             {
                 // Explicitly get the valuation that satisfies the formula => SAT.
@@ -517,7 +705,7 @@ sat_t dpll_solve(const FORMULA* intial_formula)
                 // Use decision to obtain substitution:
                 dpll_apply_decide(&trial, &formula);
 
-                printf(YELLOW"[DECIDE ] "RESET);
+                printf(YELLOW"[DECIDE    ] "RESET);
                 TRIAL_print(&trial);
             }
         }
@@ -543,7 +731,7 @@ int main(int argc, char* argv[])
 
     sat_t ret = dpll_solve(&to_solve);
 
-    printf("%s", ret == SAT? "SAT" : "UNSAT");
+    printf("%s\n", ret == SAT? "SAT" : "UNSAT");
 
     FORMULA_free(&to_solve);
 

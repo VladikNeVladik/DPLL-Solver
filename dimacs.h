@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <errno.h>
+#include <ctype.h>
 
 #include "utils.h"
 #include "formula.h"
@@ -46,10 +47,15 @@ void DIMACS_load_formula(const char* filename, FORMULA* formula)
             "[DIMACS_load_formula] Line %zu is too long (expected up to %u characters)\n",
             line_i, MAX_LINE_LENGTH);
 
-        // Parse comment line:
+        // Parse comment lines:
         if (line[0] == 'c')
         {
             // Do nothing.
+        }
+        // Parse file termination:
+        else if (line[0] == '%')
+        {
+            break;
         }
         // Parse problem:
         else if (line[0] == 'p')
@@ -57,12 +63,13 @@ void DIMACS_load_formula(const char* filename, FORMULA* formula)
             VERIFY_CONTRACT(entered_problem == false,
                 "[DIMACS_load_formula] Line %zu is a duplicate problem line\n", line_i);
 
-            int ret = sscanf(line, "p cnf %u %u", &num_variables, &num_clauses);
-            VERIFY_CONTRACT(ret == 2,
+            char dumpster[10U];
+            int ret = sscanf(line, "p cnf %u%10[ ]%u",
+                &num_variables, dumpster, &num_clauses);
+            VERIFY_CONTRACT(ret == 3,
                 "[DIMACS_load_formula] Line %zu has invalid format\n", line_i);
 
             entered_problem = true;
-
         }
         // Parse clause:
         else
@@ -71,6 +78,12 @@ void DIMACS_load_formula(const char* filename, FORMULA* formula)
             CLAUSE_init(&new_clause);
 
             char* cur = line;
+            // Handle spurious leading whitespace:
+            while (*cur != '\0' && isspace(*cur))
+            {
+                cur += 1U;
+            }
+
             while (true)
             {
                 // Read a value from line:
