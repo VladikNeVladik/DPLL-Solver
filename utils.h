@@ -9,6 +9,9 @@
 // Input verification //
 //====================//
 
+// Disable debug checks for performance
+#define NDEBUG
+
 #ifndef NDEBUG
 #define VERIFY_CONTRACT(contract, format, ...) \
     do { \

@@ -241,7 +241,9 @@ void TRIAL_add_to_assertion_queue(TRIAL* trial, literal_t literal)
 // Checks whether a given assertion trial unsatisfies a formula:
 bool TRIAL_formula_is_unsat(const TRIAL* trial)
 {
+    #ifndef NDEBUG
     printf("[CHECK SAT ] Trial is %s\n", trial->conflict_flag? "UNSAT" : "SAT");
+    #endif
 
     return trial->conflict_flag;
 }
@@ -325,29 +327,21 @@ void dpll_notify_watches(TRIAL* trial, FORMULA* formula, literal_t literal)
     // NOTE: literal is the inversion of the asserted literal
 
     // Get current watch list to work with:
-    WATCHED_STORAGE* wl = WATCH_LIST_get(&trial->wl, literal);
+    WATCHED_STORAGE* ws = WATCH_LIST_get(&trial->wl, literal);
 
     // Create a new watch list:
-    WATCHED_STORAGE newWL;
-    WATCHED_STORAGE_init(&newWL, CLAUSE_PTR_eq, CLAUSE_PTR_lt, false);
+    WATCHED_STORAGE newWS;
+    WATCHED_STORAGE_init(&newWS, CLAUSE_PTR_eq, CLAUSE_PTR_lt, false);
 
-    for (size_t cls_i = 0U; cls_i < wl->size; ++cls_i)
+    for (size_t cls_i = 0U; cls_i < ws->size; ++cls_i)
     {
         // Fuck with the type system a bit:
-        CLAUSE* cls = (CLAUSE*)(void*) WATCHED_STORAGE_get(wl, cls_i);
-
-        // Quick check whether clause contains a true literal:
-        if (TRIAL_literal_is_true(trial, CLAUSE_watch1(cls)))
-        {
-            // True clauses do not need any notifications:
-            continue;
-        }
+        CLAUSE* cls = (CLAUSE*)(void*) WATCHED_STORAGE_get(ws, cls_i);
 
         // Check whether a watched literal is falsified:
-        if (CLAUSE_watch1(cls) != literal && CLAUSE_watch2(cls) != literal)
-        {
-            continue;
-        }
+        BUG_ON(CLAUSE_watch1(cls) != literal && CLAUSE_watch2(cls) != literal,
+            "[dpll_notify_watches] Watchlist invariant is broken for clause #%zu",
+            cls_i);
 
         // Ensure that second literal is falsified:
         if (CLAUSE_watch1(cls) == literal)
@@ -362,7 +356,7 @@ void dpll_notify_watches(TRIAL* trial, FORMULA* formula, literal_t literal)
         if (TRIAL_literal_is_true(trial, CLAUSE_watch1(cls)))
         {
             // Add clause to watch list:
-            WATCHED_STORAGE_push(&newWL, cls);
+            WATCHED_STORAGE_push(&newWS, cls);
 
             continue;
         }
@@ -378,10 +372,17 @@ void dpll_notify_watches(TRIAL* trial, FORMULA* formula, literal_t literal)
             literal_t lit = CLAUSE_get(cls, lit_i);
             if (!TRIAL_literal_is_false(trial, lit))
             {
+                // Update watched literal:
                 CLAUSE_set_watch2(cls, lit_i);
 
-                // Add clause to watch list:
-                WATCHED_STORAGE_push(&newWL, cls);
+                // Add clause to watch list of the new watched literal:
+                // NOTE: this possibly removes the clause from the watch list wl
+                WATCHED_STORAGE* ws_other = WATCH_LIST_get(&trial->wl, lit);
+
+                if (!WATCHED_STORAGE_find(ws_other, cls))
+                {
+                    WATCHED_STORAGE_push(ws_other, cls);
+                }
 
                 has_unfalsified = true;
                 break;
@@ -406,7 +407,7 @@ void dpll_notify_watches(TRIAL* trial, FORMULA* formula, literal_t literal)
             trial->conflict_flag = true;
 
             // Add clause to watch list:
-            WATCHED_STORAGE_push(&newWL, cls);
+            WATCHED_STORAGE_push(&newWS, cls);
         }
         else
         {
@@ -414,15 +415,17 @@ void dpll_notify_watches(TRIAL* trial, FORMULA* formula, literal_t literal)
             TRIAL_add_to_assertion_queue(trial, CLAUSE_watch1(cls));
 
             // Add clause to watch list:
-            WATCHED_STORAGE_push(&newWL, cls);
+            WATCHED_STORAGE_push(&newWS, cls);
         }
     }
 
     // Update watch list:
-    WATCH_LIST_set(&trial->wl, literal, newWL);
+    WATCH_LIST_set(&trial->wl, literal, newWS);
 
+    #ifndef NDEBUG
     printf(YELLOW"[WATCH %d]\n"RESET, LITERAL_value(literal));
     WATCH_LIST_print(&trial->wl, formula);
+    #endif
 }
 
 void dpll_assert_literal(TRIAL* trial, FORMULA* formula, literal_t literal)
@@ -581,33 +584,33 @@ sat_t dpll_preprocess_formula(const FORMULA* initial, FORMULA* resulting, TRIAL*
 literal_t dpll_select_literal(TRIAL* trial, const FORMULA* formula)
 {
     // Iterate over the formula from least clauses to bigger:
-    // literal_t selected = LITERAL_NULL;
-    // for (size_t cls_i = 0U; cls_i < FORMULA_size(formula); ++cls_i)
-    // {
-    //     CLAUSE* cls = FORMULA_get(formula, cls_i);
+    literal_t selected = LITERAL_NULL;
+    for (size_t cls_i = 0U; cls_i < FORMULA_size(formula); ++cls_i)
+    {
+        CLAUSE* cls = FORMULA_get(formula, cls_i);
 
-    //     // Check only the watches:
-    //     literal_t watch1 = CLAUSE_watch1(cls);
-    //     literal_t watch2 = CLAUSE_watch2(cls);
+        // Check only the watches:
+        literal_t watch1 = CLAUSE_watch1(cls);
+        literal_t watch2 = CLAUSE_watch2(cls);
 
-    //     if (TRIAL_literal_is_undef(trial, watch1))
-    //     {
-    //         selected = watch1 ^ LITERAL_CONTRARY_BIT;
-    //         break;
-    //     }
+        if (TRIAL_literal_is_undef(trial, watch1))
+        {
+            selected = watch1 ^ LITERAL_CONTRARY_BIT;
+            break;
+        }
 
-    //     if (TRIAL_literal_is_undef(trial, watch2))
-    //     {
-    //         selected = watch2 ^ LITERAL_CONTRARY_BIT;
-    //         break;
-    //     }
-    // }
+        if (TRIAL_literal_is_undef(trial, watch2))
+        {
+            selected = watch2 ^ LITERAL_CONTRARY_BIT;
+            break;
+        }
+    }
 
-    // if (selected != LITERAL_NULL)
-    // {
-    //     VARIABLES_remove_literal(&trial->unselected, selected);
-    //     return selected;
-    // }
+    if (selected != LITERAL_NULL)
+    {
+        VARIABLES_remove_literal(&trial->unselected, selected);
+        return selected;
+    }
 
     return VARIABLES_pop_asserted(&trial->unselected);
 }
@@ -621,6 +624,11 @@ void dpll_apply_decide(TRIAL* trial, FORMULA* formula)
         "[%s] Termination not detected\n", "dpll_apply_decide");
 
     dpll_assert_literal(trial, formula, branching_literal | LITERAL_DECISION_BIT);
+
+    #ifndef NDEBUG
+    printf(YELLOW"[DECIDE %3d] "RESET, LITERAL_value(branching_literal));
+    TRIAL_print(trial);
+    #endif
 }
 
 //
@@ -662,8 +670,10 @@ sat_t dpll_solve(const FORMULA* initial_formula)
 
     sat_flag = dpll_preprocess_formula(initial_formula, &formula, &trial);
 
+    #ifndef NDEBUG
     printf(YELLOW"[PREPROCESS] "RESET);
     dpll_print_progress(&trial, &formula);
+    #endif
 
     // DPLL algorithm:
     while (sat_flag == UNDEF)
@@ -671,8 +681,10 @@ sat_t dpll_solve(const FORMULA* initial_formula)
         // Optimize the search by unit propagation:
         dpll_exhaustive_unit_propagate(&trial, &formula);
 
+        #ifndef NDEBUG
         printf(YELLOW"[PROPAGATE ] "RESET);
         dpll_print_progress(&trial, &formula);
+        #endif
 
         if (TRIAL_formula_is_unsat(&trial))
         {
@@ -686,8 +698,10 @@ sat_t dpll_solve(const FORMULA* initial_formula)
                 // Pop substitution from the trial:
                 dpll_apply_backtrack(&trial, &formula);
 
+                #ifndef NDEBUG
                 printf(YELLOW"[BACKTRACK ] "RESET);
                 TRIAL_print(&trial);
+                #endif
             }
         }
         else
@@ -704,9 +718,6 @@ sat_t dpll_solve(const FORMULA* initial_formula)
             {
                 // Use decision to obtain substitution:
                 dpll_apply_decide(&trial, &formula);
-
-                printf(YELLOW"[DECIDE    ] "RESET);
-                TRIAL_print(&trial);
             }
         }
     }

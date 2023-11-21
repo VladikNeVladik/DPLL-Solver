@@ -139,10 +139,15 @@ void VARIABLES_remove_literal(VARIABLES* vars, literal_t lit)
     uint16_t slot    = val / NUM_SUBSLOTS;
     uint16_t subslot = val % NUM_SUBSLOTS;
 
+    bool was_used = vars->used[slot] & BIT_MASK(subslot);
+
     vars->used[slot]       &= ~BIT_MASK(subslot);
     vars->contrarity[slot] &= ~BIT_MASK(subslot);
 
-    vars->num_literals -= 1U;
+    if (was_used)
+    {
+        vars->num_literals -= 1U;
+    }
 }
 
 bool VARIABLES_literal_is_true(const VARIABLES* vars, literal_t lit)
