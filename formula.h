@@ -45,51 +45,56 @@ bool LITERAL_lt(const literal_t* el1, const literal_t* el2)
     return LITERAL_VALUE_Get(*el1) < LITERAL_VALUE_Get(*el2);
 }
 
+int LITERAL_value(literal_t lit)
+{
+    int value = LITERAL_VALUE_Get(lit);
+
+    return (lit & LITERAL_CONTRARY_BIT)? -value : value;
+}
+
 //=======================//
 // Set of used variables //
 //=======================//
 
-#define SUBSLOT_BITSHIFT(subslot)     (2U * ((subslot) & 0xFU))
-#define SUBSLOT_USED_BIT(subslot)     BIT_MASK(SUBSLOT_BITSHIFT(subslot) + 1U)
-#define SUBSLOT_CONTRARY_BIT(subslot) BIT_MASK(SUBSLOT_BITSHIFT(subslot) + 0U)
-
-#define NUM_SLOTS    128U
-#define NUM_SUBSLOTS 16U
+#define NUM_SLOTS    64U
+#define NUM_SUBSLOTS 32U
 
 // Variable set representation:
 // - Variable is represented by a subslot of 2 bits;
 // - Each 16 variables are packed into a slot;
-// - 128 slots make up a whole set of variables;
+// - 64 slots make up a whole set of variables;
 typedef struct {
-    uint32_t slots[NUM_SLOTS];
+    uint32_t       used[NUM_SLOTS];
+    uint32_t contrarity[NUM_SLOTS];
 } VARIABLES;
 
 void VARIABLES_init(VARIABLES* vars)
 {
-    memset(vars->slots, 0U, NUM_SLOTS * sizeof(uint32_t));
+    memset(vars->used,       0U, NUM_SLOTS * sizeof(uint32_t));
+    memset(vars->contrarity, 0U, NUM_SLOTS * sizeof(uint32_t));
 }
 
 bool VARIABLES_equal(const VARIABLES* a, const VARIABLES* b)
 {
-    return memcmp(a->slots, b->slots, NUM_SLOTS * sizeof(uint32_t)) == 0U;
+    return memcmp(a->used, b->used, NUM_SLOTS * sizeof(uint32_t)) == 0U;
 }
 
 literal_t VARIABLES_pop_asserted(VARIABLES* vars)
 {
     for (uint16_t slot = 0U; slot < NUM_SLOTS; ++slot)
     {
-        if (vars->slots[slot] != 0U)
+        if (vars->used[slot] != 0U)
         {
             for (unsigned subslot = 0U; subslot < NUM_SUBSLOTS; ++subslot)
             {
-                bool used = vars->slots[slot] & SUBSLOT_USED_BIT(subslot);
+                bool used = vars->used[slot] & BIT_MASK(subslot);
                 if (used)
                 {
                     literal_t lit = 0U;
                     LITERAL_VALUE_Set(lit, slot * NUM_SUBSLOTS + subslot);
 
-                    vars->slots[slot] &= ~SUBSLOT_USED_BIT(subslot);
-                    vars->slots[slot] &= ~SUBSLOT_CONTRARY_BIT(subslot);
+                    vars->used[slot]       &= ~BIT_MASK(subslot);
+                    vars->contrarity[slot] &= ~BIT_MASK(subslot);
 
                     return lit;
                 }
@@ -109,8 +114,8 @@ void VARIABLES_assert_literal(VARIABLES* vars, literal_t lit)
     uint16_t subslot = val % NUM_SUBSLOTS;
 
     // Use subslot and set contrarity:
-    vars->slots[slot] |= SUBSLOT_USED_BIT(subslot);
-    vars->slots[slot] |= (contrary << SUBSLOT_BITSHIFT(subslot));
+    vars->used[slot]       |= BIT_MASK(subslot);
+    vars->contrarity[slot] |= (contrary << subslot);
 }
 
 void VARIABLES_remove_literal(VARIABLES* vars, literal_t lit)
@@ -119,8 +124,8 @@ void VARIABLES_remove_literal(VARIABLES* vars, literal_t lit)
     uint16_t slot    = val / NUM_SUBSLOTS;
     uint16_t subslot = val % NUM_SUBSLOTS;
 
-    vars->slots[slot] &= ~SUBSLOT_USED_BIT(subslot);
-    vars->slots[slot] &= ~SUBSLOT_CONTRARY_BIT(subslot);
+    vars->used[slot]       &= ~BIT_MASK(subslot);
+    vars->contrarity[slot] &= ~BIT_MASK(subslot);
 }
 
 bool VARIABLES_literal_is_true(const VARIABLES* vars, literal_t lit)
@@ -129,9 +134,10 @@ bool VARIABLES_literal_is_true(const VARIABLES* vars, literal_t lit)
     uint16_t slot    = val / NUM_SUBSLOTS;
     uint16_t subslot = val % NUM_SUBSLOTS;
 
-    bool used = vars->slots[slot] & SUBSLOT_USED_BIT(subslot);
+    bool used = vars->used[slot] & BIT_MASK(subslot);
+
     bool contrarity_lit = !!(lit & LITERAL_CONTRARY_BIT);
-    bool contrarity_var = !!(vars->slots[slot] & SUBSLOT_CONTRARY_BIT(subslot));
+    bool contrarity_var = !!(vars->contrarity[slot] & BIT_MASK(subslot));
 
     return used && contrarity_lit == contrarity_var;
 }
@@ -142,9 +148,10 @@ bool VARIABLES_literal_is_false(const VARIABLES* vars, literal_t lit)
     uint16_t slot    = val / NUM_SUBSLOTS;
     uint16_t subslot = val % NUM_SUBSLOTS;
 
-    bool used = vars->slots[slot] & SUBSLOT_USED_BIT(subslot);
+    bool used = vars->used[slot] & BIT_MASK(subslot);
+
     bool contrarity_lit = !!(lit & LITERAL_CONTRARY_BIT);
-    bool contrarity_var = !!(vars->slots[slot] & SUBSLOT_CONTRARY_BIT(subslot));
+    bool contrarity_var = !!(vars->contrarity[slot] & BIT_MASK(subslot));
 
     return used && contrarity_lit != contrarity_var;
 }
@@ -155,8 +162,33 @@ bool VARIABLES_literal_is_undef(const VARIABLES* vars, literal_t lit)
     uint16_t slot    = val / NUM_SUBSLOTS;
     uint16_t subslot = val % NUM_SUBSLOTS;
 
-    bool used = vars->slots[slot] & SUBSLOT_USED_BIT(subslot);
+    bool used = vars->used[slot] & BIT_MASK(subslot);
     return !used;
+}
+
+void VARIABLES_print(const VARIABLES* vars)
+{
+    for (uint16_t slot = 0U; slot < NUM_SLOTS; ++slot)
+    {
+        printf("%04x ", vars->used[slot]);
+
+        // if (vars->used[slot] != 0U)
+        // {
+        //     for (unsigned subslot = 0U; subslot < NUM_SUBSLOTS; ++subslot)
+        //     {
+        //         bool used = vars->used[slot] & BIT_MASK(subslot);
+        //         if (used)
+        //         {
+        //             int value = slot * NUM_SUBSLOTS + subslot;
+        //             bool contrarity = vars->contrarity[slot] & BIT_MASK(subslot);
+
+        //             printf("%3d ", contrarity? -value : value);
+        //         }
+        //     }
+        // }
+    }
+
+    printf("\n");
 }
 
 //=======================//
@@ -179,7 +211,7 @@ void CLAUSE_init(CLAUSE* clause)
         &clause->literals,
         &LITERAL_eq_value,
         &LITERAL_lt,
-        true /*sorted*/);
+        false /*sorted*/);
 }
 
 void CLAUSE_free(CLAUSE* clause)
@@ -224,11 +256,7 @@ void CLAUSE_print(const CLAUSE* clause)
     {
         literal_t lit = CLAUSE_get(clause, lit_i);
 
-        int value = (lit & LITERAL_CONTRARY_BIT)?
-                    -LITERAL_VALUE_Get(lit) :
-                     LITERAL_VALUE_Get(lit);
-
-        printf("%5d ", value);
+        printf("%5d ", LITERAL_value(lit));
     }
 
     printf("\n");
@@ -311,7 +339,7 @@ void FORMULA_insert(FORMULA* formula, CLAUSE clause)
     {
         literal_t lit = CLAUSE_get(&clause, lit_i);
 
-        VARIABLES_assert_literal(&formula->variables, lit);
+        VARIABLES_assert_literal(&formula->variables, lit & ~LITERAL_CONTRARY_BIT);
     }
 }
 

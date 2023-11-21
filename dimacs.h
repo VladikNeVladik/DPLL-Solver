@@ -40,8 +40,6 @@ void DIMACS_load_formula(const char* filename, FORMULA* formula)
             break;
         }
 
-        printf("Handle line#%3ld: %s", line_i, line);
-
         // Get line length:
         size_t len = strlen(line);
         VERIFY_CONTRACT(len > 0 && line[len - 1U] == '\n',

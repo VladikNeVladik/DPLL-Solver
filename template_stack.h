@@ -12,12 +12,13 @@
 #error "[ERROR] Expected macro DATA_STRUCTURE to be defined to element type"
 #endif
 
-// Macros to be simplify code generation:
+// Macros to simplify code generation:
 #define        CALL(structure, method) structure ## _ ## method
 #define EXPAND_CALL(structure, method) CALL(structure, method)
 #define METHOD(method) EXPAND_CALL(DATA_STRUCTURE, method)
 
-#define METHOD_STR(method) STR(METHOD(method))
+#define EXPAND_STR(str)    STR(str)
+#define METHOD_STR(method) EXPAND_STR(METHOD(method))
 
 #include <stdlib.h>
 #include <stdbool.h>
@@ -84,10 +85,10 @@ void METHOD(init)(
 
     // Initialize size and capacity:
     stack->size = 0U;
-    stack->capacity = 1U;
+    stack->capacity = 8U;
 
     // Allocate stack of size one:
-    stack->array = malloc(1U * sizeof(DATA_T));
+    stack->array = calloc(8U, sizeof(DATA_T));
     VERIFY_CONTRACT(
         stack->array != NULL,
         "[%s] Unable to allocate memory for stack of capacity %zu\n",
@@ -135,13 +136,13 @@ void METHOD(resize)(DATA_STRUCTURE* stack, bool upscale)
         METHOD_STR(resize));
 
     // Determine new size:
-    size_t new_size = stack->size + (upscale? +1U : -1U);
+    size_t new_size = upscale? (stack->size + 1U) : (stack->size - 1U);
 
     // Determine new capacity:
     size_t new_capacity = 0U;
     if (upscale && new_size > stack->capacity)
     {
-        new_capacity = (stack->size == 0U)? 4U : (2U * stack->capacity);
+        new_capacity = (stack->size < 8U)? 8U : (2U * stack->capacity);
     }
     else if (!upscale && new_size < stack->capacity / 8U)
     {
@@ -271,6 +272,29 @@ size_t METHOD(search_sorted)(const DATA_STRUCTURE* stack, DATA_T element)
     return left;
 }
 
+bool METHOD(find)(const DATA_STRUCTURE* stack, DATA_T element)
+{
+    assert(stack != NULL);
+
+    VERIFY_CONTRACT(METHOD(ok)(stack),
+        "[%s] Unable to get find element in invalid stack\n",
+        METHOD_STR(find_sorted));
+
+    VERIFY_CONTRACT(!stack->sorted,
+        "[%s] Unable to dumb-search in sorted array\n",
+        METHOD_STR(find_sorted));
+
+    for (size_t i = 0U; i < stack->size; ++i)
+    {
+        if (stack->comp_eq(&stack->array[i], &element))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 bool METHOD(find_sorted)(const DATA_STRUCTURE* stack, DATA_T element)
 {
     assert(stack != NULL);
@@ -303,12 +327,12 @@ void METHOD(swap)(DATA_STRUCTURE* stack, size_t index1, size_t index2)
         METHOD_STR(swap));
 
     VERIFY_CONTRACT(
-        index1 <= stack->size,
+        index1 < stack->size,
         "[%s] Index #1 out of bounds\n",
         METHOD_STR(swap));
 
     VERIFY_CONTRACT(
-        index2 <= stack->size,
+        index2 < stack->size,
         "[%s] Index #2 out of bounds\n",
         METHOD_STR(swap));
 
@@ -414,13 +438,14 @@ void METHOD(insert_sorted)(DATA_STRUCTURE* stack, DATA_T element)
         "[%s] Unable to insert into non-sorted array\n",
         METHOD_STR(insert_sorted));
 
+    // Determine the index for insertion:
+    size_t index = METHOD(ubound_sorted)(stack, element);
+
     // Resize to provide space for new element:
     METHOD(resize)(stack, RESIZE_ONEUP);
 
-    size_t index = METHOD(ubound_sorted)(stack, element);
-
     // Move elements one to the right:
-    for (size_t copy_i = stack->size; index < copy_i; copy_i--)
+    for (size_t copy_i = stack->size - 1U; index < copy_i; copy_i--)
     {
         stack->array[copy_i] = stack->array[copy_i - 1U];
     }
@@ -438,7 +463,7 @@ void METHOD(remove)(DATA_STRUCTURE* stack, DATA_T* element, size_t index)
         "[%s] Unable to remove element from invalid stack\n",
         METHOD_STR(remove));
     VERIFY_CONTRACT(
-        index <= stack->size,
+        index < stack->size,
         "[%s] Index out of bounds\n",
         METHOD_STR(remove));
 
